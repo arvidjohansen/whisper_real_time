@@ -1,6 +1,7 @@
 #! python3.7
 
 import argparse
+
 import os
 import numpy as np
 import speech_recognition as sr
@@ -8,13 +9,16 @@ import whisper
 import torch
 
 from datetime import datetime, timedelta
+
 from queue import Queue
 from time import sleep
 from sys import platform
 import logging
-logging.basicConfig(format='%(asctime)s %(message)s', 
+
+
+logging.basicConfig(format='%(asctime)s %(message)s',
                              datefmt='%m/%d/%Y %I:%M:%S %p',
-                             level=logging.DEBUG,
+                             #level=logging.DEBUG,
                              )      
 logger = logging.getLogger(__name__)    
 logger.setLevel(logging.DEBUG)  
@@ -31,19 +35,19 @@ def type_text(letter=''):
     while is_typing:
         if letter:
             keyboard.type(letter)
-            sleep(0.1)  # Delay between each keypress
+            sleep(1)  # Delay between each keypress
 def type_letter(letter):
     keyboard.type(letter)
     sleep(0.01)  # Delay between each keypress
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", default="medium", help="Model to use",
-                        choices=["tiny", "base", "small", "medium", "large", ])
+                        choices=["tiny", "base", "small", "medium", "large", "norwegian"])
     parser.add_argument("--non_english", action='store_true',
                         help="Don't use the english model.")
     parser.add_argument("--language", default = 'en',
                         help="Specify which language to use.")
-    parser.add_argument("--energy_threshold", default=900,
+    parser.add_argument("--energy_threshold", default=1000,
                         help="Energy level for mic to detect.", type=int)
     parser.add_argument("--record_timeout", default=2,
                         help="How real time the recording is in seconds.", type=float)
@@ -125,7 +129,6 @@ def main():
                 # If enough time has passed between recordings, consider the phrase complete.
                 # Clear the current working audio buffer to start over with the new data.
                 if phrase_time and now - phrase_time > timedelta(seconds=phrase_timeout):
-                    logger.debug(f'Phrase complete!')
                     phrase_complete = True
                 # This is the last time we received new audio data from the queue.
                 phrase_time = now
@@ -141,7 +144,7 @@ def main():
 
                 # Read the transcription.
                 extra_args = {
-                    #"word_timestamps":True,
+                    "word_timestamps":True,
                     
                               }
                 if not args.non_english:
@@ -151,12 +154,11 @@ def main():
                 elif args.language:
                     result = audio_model.transcribe(audio_np, 
                                                     language=args.language, 
-                                                    
                                                     fp16=torch.cuda.is_available(),
                                                     **extra_args)
                 else:
                     result = audio_model.transcribe(audio_np, 
-                                                    language="en", 
+                                                    language="no", 
                                                     fp16=torch.cuda.is_available(),
                                                    **extra_args,prepend_punctuations=True)
                 text = result['text'].strip()
@@ -164,16 +166,30 @@ def main():
                 # If we detected a pause between recordings, add a new item to our transcription.
                 # Otherwise edit the existing one.
                 if phrase_complete:
-                    transcription.append(text)
+                    # Phrase is complete. 
+                    # First check for commands
+                    # If type start, enable function but DONT type it
+                    # If type stop, disable function but DONT type it
+                    # If insert symbol, insert correct symbol
                     
+
+                    cmd_name = check_for_commands(text)
+                    if cmd_name:
+                        logger.debug(f'Preparing execution of command: {cmd_name}')
+                        text_to_insert = run_command(cmd_name)
+                        if text_to_insert:
+                            transcription.append(text_to_insert)
+
+
+                    transcription.append(text)
+
+                    # actually print the characters (if enabled)
                     global is_typing
                     if is_typing:
                         for letter in text:
                             type_letter(letter)
-                    check_for_commands(text)
 
                 else:
-                    logger.debug(f'Flushing')
                     transcription[-1] = text
 
                 # Clear the console to reprint the updated transcription.
@@ -193,28 +209,66 @@ def main():
     print("\n\nTranscription:")
     for line in transcription:
         print(line)
+# Add new supported commands here
+# Format: Tuple
+# (trigger_words(list:str), command_name(str))
 
-
+SUPPORTED_COMMANDS = [
+    (['type start','typestart','starttype','start type'],'type_start'),
+    (['type stop','typestop','stoptype','stop type'],'type_stop'),
+    (['new line','newline','insert line','insertline'],'insert_line'),
+]
 def check_for_commands(text:str):
-    text_lower = text.lower()
+    """This function takes the inputted text,
+    loops through every trigger_word combination 
+    defined in SUPPORTED_COMMANDS
+    and checks for all possible matches.
+
+    Will automatically call the associated command.
+
+    Keyword arguments:
+    text -- str (the input text that has just been translated)
+    Return: str (name of matched command, otherwise empty string '')
+    """
+    
+    text = text.lower()
+    logger.debug(f'Checking for command in following text: "{text}"')
+    
+    # Loop through supported commands
+    for trigger_word_list,command_name  in SUPPORTED_COMMANDS:
+        # Loop through every combination in the first part of the tuple
+        for combo in trigger_word_list:
+            # Check every combination for match
+            logger.debug(f'Checking for match with "{combo}"')
+            if combo == text:
+                # Match successfull
+                logger.debug(f'Success! Executing command: {command_name} ')
+                return command_name
+    return ''
+    
+
+
+
+
+    """
     if "type start" in text_lower or "typestart" in text_lower or "type" in text_lower and "start" in text_lower:
         logger.info(">>>type start")
         run_command("type start")
     elif "type stop" in text_lower or "typestop" in text_lower or "type" in text_lower and "stop" in text_lower:
-        logger.info(">>>type stop") 
         run_command("type stop")
+        logger.info(">>>type stop") 
     else:
         logger.info(">>>no valid action")
+    """
 
 def run_command(command):
     global is_typing
-    if command == "type start":
+    if command == "type_start":
         is_typing = True
-        # threading.Thread(target=type_text).start()
-
-        # print(f">>>{command}")
-    elif command == "type stop":
+    elif command == "type_stop":
         is_typing = False
-        # print(f">>>{command}")
+    elif command == "insert_line":
+        return '\n'
+
 if __name__ == "__main__":
     main()
