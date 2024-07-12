@@ -1,3 +1,6 @@
 [submodule "whisper_streaming"]
 	path = whisper_streaming
 	url = https://github.com/ufal/whisper_streaming
+[submodule "speech-recognition-and-translation"]
+	path = speech-recognition-and-translation
+	url = https://github.com/shubh7185/speech-recognition-and-translation
